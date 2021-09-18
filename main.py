@@ -11,6 +11,7 @@ from datasets.timit_loader import TIMIT
 from models.SRNN import RNNtanh, LSTM, GRU, SRNN, nnRNN, SRNNFast
 from models.urnncell import URNN
 from models.nrucell import NRUWrapper
+from models.SRNNGRU import SRNNGRU
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -34,7 +35,7 @@ def count_parameters(model):
 
 
 model_dict = {'srnn': SRNN, 'urnn': URNN, 'rnntanh': RNNtanh, 'lstm': LSTM, 'nru': NRUWrapper, 'gru': GRU,
-              'nnrnn': nnRNN, 'srnnfast': SRNNFast}
+              'nnrnn': nnRNN, 'srnnfast': SRNNFast, 'srnngru':SRNNGRU}
 datasets_dict = {'copy': CopyingMemoryProblemDataset, 'addition': AddingProblemDataset, 'pmnist': MnistProblemDataset,
                  'bmnist': BigMnistProblemDataset, 'rmnist': RandomMnistProblemDataset, 'timit': TIMIT}
 outputsize_dict = {'copy': 10, 'addition': 1, 'pmnist': 10, 'rmnist': 10, 'bmnist': 10, 'timit': 129}
