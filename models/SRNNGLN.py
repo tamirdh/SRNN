@@ -9,6 +9,7 @@ class SRNN_GLN_Cell(nn.Module):
         super().__init__()
         assert len(hyper_sizes) == num_layers, "Layer sizes should match number of layers"
         gated_units_list = list()
+        print(f"Input:{input_size}, hyper:{hyper_sizes}")
         for i in range(num_layers):
             if i==0:
                 gated_units_list.extend([nn.Linear(input_size, hyper_sizes[0]),
