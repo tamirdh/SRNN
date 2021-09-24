@@ -19,6 +19,7 @@ class SRNN_GLN_Cell(nn.Module):
                 nn.Linear(hyper_sizes[i], hyper_sizes[i])])
         gated_units_list.append(nn.Linear(hyper_sizes[-1], hidden_size))
         self.gln = nn.ModuleList(gated_units_list)
+        self.fc2 = nn.Linear(input_size, hidden_size)
         if 'multihead' not in kwargs:
             self.multihead = True
         else:
