@@ -61,6 +61,7 @@ class SRNN_GLN_Cell(nn.Module):
                 out = layer(out) * self.gln[index+1](out).sigmoid()
             else:
                 continue
+        out = self.gln[-1](out)
         
         return out
 
