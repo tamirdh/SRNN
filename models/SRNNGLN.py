@@ -69,7 +69,7 @@ class SRNN_GLN(nn.Module):
     def __init__(self, input_size, output_size, hidden_size, num_layers, *args, **kwargs):
         super().__init__()
         self.single_output = kwargs['single_output']
-        hyper_sizes = [kwargs['hyper_size']/(i+1) for i in range(num_layers)]
+        hyper_sizes = [int(kwargs['hyper_size']/(i+1)) for i in range(num_layers)]
         if kwargs['embedding']:
             self.embedding = nn.Embedding(input_size, kwargs['hyper_size'])
             self.rnncell = SRNN_GLN_Cell(kwargs['hyper_size'], hidden_size, num_layers, hyper_sizes, **kwargs)
