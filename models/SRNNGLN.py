@@ -56,7 +56,7 @@ class SRNN_GLN_Cell(nn.Module):
         for index, layer in enumerate(self.gln):
             if out is None:
                 out = layer(x) * self.gln[index+1](x).sigmoid()
-            elif index % 2 == 0:
+            elif index % 2 == 0 and index != len(self.gln)-1:
                 out = layer(out) * self.gln[index+1](out).sigmoid()
             else:
                 continue
