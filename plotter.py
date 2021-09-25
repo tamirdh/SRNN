@@ -34,6 +34,7 @@ class Plotter:
         plt.xlabel = "Epoch"
         plt.ylabel = "Loss value"
         plt.legend()
+        plt.savefig("Loss.png", format="png")
 
 
 
