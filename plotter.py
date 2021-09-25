@@ -23,7 +23,7 @@ class Plotter:
             
             with open(model_file, "r") as source:
                 lines = source.readlines()
-            model_data = [float(i.split(",")[-1]) for i in lines]
+            model_data = [float(i.split(",")[-1]) for i in lines[1:]]
             models[model] = model_data
         return models
     
