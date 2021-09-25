@@ -7,7 +7,7 @@ class Plotter:
     
     def _get_run_data(self, problem: str, param: int, filename:str)->dict:
         models = dict()
-        problem_path = os.path.join(self.path, problem, param)
+        problem_path = os.path.join(self.path, problem, str(param))
         used_models = os.listdir(problem_path)
         for model in used_models:
             model_path = os.path.join(problem_path, model)
