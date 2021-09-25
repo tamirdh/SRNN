@@ -1,6 +1,9 @@
 import matplotlib.pyplot as plt
 import os 
 
+os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+
+
 class Plotter:
     def __init__(self, exp_path) -> None:
         self.path = exp_path
