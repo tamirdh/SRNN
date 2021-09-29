@@ -12,6 +12,7 @@ from models.SRNN import RNNtanh, LSTM, GRU, SRNN, nnRNN, SRNNFast
 from models.urnncell import URNN
 from models.nrucell import NRUWrapper
 from models.SRNNGLN import SRNN_GLN
+from models.SRNNGLN_online import Online_SRNN_GLN
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -22,7 +23,6 @@ import os
 # from utils import better_hparams
 import math
 from nnrnnutils import select_optimizer
-
 ex = Experiment('Adding Problem')
 storage_path = 'storage'
 ex.observers.append(FileStorageObserver.create(storage_path))
@@ -35,7 +35,7 @@ def count_parameters(model):
 
 
 model_dict = {'srnn': SRNN, 'urnn': URNN, 'rnntanh': RNNtanh, 'lstm': LSTM, 'nru': NRUWrapper, 'gru': GRU,
-              'nnrnn': nnRNN, 'srnnfast': SRNNFast, 'srnngln':SRNN_GLN}
+              'nnrnn': nnRNN, 'srnnfast': SRNNFast, 'srnngln':SRNN_GLN, "online":Online_SRNN_GLN}
 datasets_dict = {'copy': CopyingMemoryProblemDataset, 'addition': AddingProblemDataset, 'pmnist': MnistProblemDataset,
                  'bmnist': BigMnistProblemDataset, 'rmnist': RandomMnistProblemDataset, 'timit': TIMIT}
 outputsize_dict = {'copy': 10, 'addition': 1, 'pmnist': 10, 'rmnist': 10, 'bmnist': 10, 'timit': 129}
@@ -51,7 +51,7 @@ def count_parameters(model):
 @ex.config
 def cfg():
     sample_len = 30
-    epochs = 1000
+    epochs = 3
     lr = 1e-3  # rmsprop uses 1e-3, adam 1e-4
     seed = 1234
     hidden_size = 128
@@ -100,7 +100,7 @@ def rmnist():
     problem = 'rmnist'
 
 
-def train_mnist(epoch, model, dataset, optimizer):
+def train_mnist(epoch, model, dataset, optimizer, writer=None):
     model.train()
     total_loss = 0
     total_accuracy = 0
@@ -122,6 +122,9 @@ def train_mnist(epoch, model, dataset, optimizer):
 
             pbar.set_description(
                 'ce: {:.4f} accuracy: {:.4f}'.format(total_loss / (i + 1), total_accuracy / (i + 1)))
+            if isinstance(model, Online_SRNN_GLN):
+                writer.add_scalar('CE/Train', total_loss / (i + 1), i)
+                writer.add_scalar('Accuracy/Train', total_accuracy / (i + 1), i)
             if isinstance(model, nnRNN):
                 lossnnrnn = model.rnncell.alpha_loss(1e-4) + loss
                 lossnnrnn.backward()
@@ -456,7 +459,7 @@ def main(_run):
         with tqdm(total=_run.config['epochs']) as pbar:
             for i in range(1, _run.config['epochs']):
                 pbar.set_description('Epoch: {:04d}'.format(i))
-                res = train_mnist(i, model, dataset, optimizer)
+                res = train_mnist(i, model, dataset, optimizer, writer)
                 writer.add_scalar('CE/Train', res[0], i)
                 writer.add_scalar('Accuracy/Train', res[1], i)
                 if problem != 'rmnist':
