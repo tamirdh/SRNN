@@ -1,3 +1,4 @@
+from numpy.lib.arraysetops import isin
 from sacred import Experiment
 from sacred.observers import FileStorageObserver
 from tqdm import tqdm
@@ -11,8 +12,8 @@ from datasets.timit_loader import TIMIT
 from models.SRNN import RNNtanh, LSTM, GRU, SRNN, nnRNN, SRNNFast
 from models.urnncell import URNN
 from models.nrucell import NRUWrapper
-from models.SRNNGLN import SRNN_GLN
-from models.SRNNGLN_online import Online_SRNN_GLN
+from models.SRNNGLN import SRNNGLN
+from models.SRNNGLN_online import Online_SRNN_GLN, Online_SRNN_GLN_Cell
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -29,13 +30,14 @@ ex.observers.append(FileStorageObserver.create(storage_path))
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
+#torch.cuda.set_device(3)
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
 model_dict = {'srnn': SRNN, 'urnn': URNN, 'rnntanh': RNNtanh, 'lstm': LSTM, 'nru': NRUWrapper, 'gru': GRU,
-              'nnrnn': nnRNN, 'srnnfast': SRNNFast, 'srnngln':SRNN_GLN, "online":Online_SRNN_GLN}
+              'nnrnn': nnRNN, 'srnnfast': SRNNFast, 'srnngln':SRNNGLN, "online":Online_SRNN_GLN}
 datasets_dict = {'copy': CopyingMemoryProblemDataset, 'addition': AddingProblemDataset, 'pmnist': MnistProblemDataset,
                  'bmnist': BigMnistProblemDataset, 'rmnist': RandomMnistProblemDataset, 'timit': TIMIT}
 outputsize_dict = {'copy': 10, 'addition': 1, 'pmnist': 10, 'rmnist': 10, 'bmnist': 10, 'timit': 129}
@@ -50,8 +52,8 @@ def count_parameters(model):
 
 @ex.config
 def cfg():
-    sample_len = 30
-    epochs = 3
+    sample_len = 100
+    epochs = 60
     lr = 1e-3  # rmsprop uses 1e-3, adam 1e-4
     seed = 1234
     hidden_size = 128
@@ -112,7 +114,10 @@ def train_mnist(epoch, model, dataset, optimizer, writer=None):
                 optimizer[1].zero_grad()
             x = x.cuda()
             y = y.cuda()
-            output = model(x)[0]
+            if isinstance(model, Online_SRNN_GLN):
+                output = model(x, y)[0]
+            else:
+                output = model(x)[0]
             loss = F.cross_entropy(output.transpose(2, 1), y.unsqueeze(1))
             total_loss += loss.item()
             _, predictions = torch.max(output, 2)
@@ -255,7 +260,10 @@ def train(epoch, model, dataset, optimizer):
                 optimizer[1].zero_grad()
             x = x.cuda()
             y = y.cuda()
-            output = model(x)[0]
+            if isinstance(model, Online_SRNN_GLN):
+                output = model(x,y)[0]
+            else:
+                output = model(x)[0]
             if model.single_output:
                 loss = F.mse_loss(output.squeeze(), y.squeeze())
                 total_loss += loss.item()
@@ -457,7 +465,7 @@ def main(_run):
         VALsACC = []
         TESTsACC = []
         with tqdm(total=_run.config['epochs']) as pbar:
-            for i in range(1, _run.config['epochs']):
+            for i in range(0, _run.config['epochs']):
                 pbar.set_description('Epoch: {:04d}'.format(i))
                 res = train_mnist(i, model, dataset, optimizer, writer)
                 writer.add_scalar('CE/Train', res[0], i)
@@ -499,7 +507,7 @@ def main(_run):
         VALsMSE = []
         TESTsMSE = []
         with tqdm(total=_run.config['epochs']) as pbar:
-            for i in range(1, _run.config['epochs']):
+            for i in range(1, _run.config['epochs']+1):
                 pbar.set_description('Epoch: {:04d}'.format(i))
                 res = train_timit(i, model, dataset, optimizer)
                 writer.add_scalar('MSE/Train', res, i)
@@ -524,7 +532,7 @@ def main(_run):
         CEs = []
         accs = []
         with tqdm(total=_run.config['epochs']) as pbar:
-            for i in range(1, _run.config['epochs']):
+            for i in range(1, _run.config['epochs']+1):
 
                 res = train(i, model, dataset, optimizer)
                 MSEs.append(res)
