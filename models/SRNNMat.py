@@ -15,7 +15,7 @@ class SRNNMatCell(jit.ScriptModule):
             l_list.extend([nn.Linear(hyper_size, hyper_size), nn.ReLU()])
         l_list.append(nn.Linear(hyper_size, hidden_size))
         self.fc = nn.Sequential(*l_list)
-
+        self.fc_end = nn.Linear(hidden_size*hidden_size, hidden_size)
         self.fc2 = nn.Linear(input_size, hidden_size)
         if 'multihead' not in kwargs:
             self.multihead = True
@@ -39,14 +39,14 @@ class SRNNMatCell(jit.ScriptModule):
                 sig_alphas = torch.sigmoid(self.fc2(x[:,i]))
                 b = b * sig_alphas
             if (i%2) ==0:
-                hidden = torch.relu(b.unsqueeze(1)+ torch.roll(torch.roll(hidden, 1, -1), 1, -2))
+                hidden = torch.relu(b.unsqueeze(1)+ torch.roll(hidden, 1, -2))
             else:
                 hidden = torch.relu(b.unsqueeze(1)+ torch.roll(hidden, 1, -1))
-            outputs.append(hidden[:, -1])
+            
+            outputs.append(hidden)
 
-        outputs = torch.stack(outputs, 1)
-        outputs = outputs.squeeze(2)
-
+        outputs = torch.stack(outputs, 1) # shape= (batch, seq_len, hidden, hidden)
+        outputs = self.fc_end(outputs.view((batch_size, seq_len, -1))) # shape= (batch, seq_len, hidden)
         return outputs, hidden
     
 
