@@ -14,6 +14,7 @@ from models.urnncell import URNN
 from models.nrucell import NRUWrapper
 from models.SRNNGLN import SRNNGLN
 from models.SRNNGLN_online import Online_SRNN_GLN, Online_SRNN_GLN_Cell
+from models.SRNNMat import SRNNMat
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -23,7 +24,9 @@ import numpy as np
 import os
 # from utils import better_hparams
 import math
+import random
 from nnrnnutils import select_optimizer
+from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence
 ex = Experiment('Adding Problem')
 storage_path = 'storage'
 ex.observers.append(FileStorageObserver.create(storage_path))
@@ -37,7 +40,7 @@ def count_parameters(model):
 
 
 model_dict = {'srnn': SRNN, 'urnn': URNN, 'rnntanh': RNNtanh, 'lstm': LSTM, 'nru': NRUWrapper, 'gru': GRU,
-              'nnrnn': nnRNN, 'srnnfast': SRNNFast, 'srnngln':SRNNGLN, "online":Online_SRNN_GLN}
+              'nnrnn': nnRNN, 'srnnfast': SRNNFast, 'srnngln':SRNNGLN, "online":Online_SRNN_GLN, 'srnnmat':SRNNMat}
 datasets_dict = {'copy': CopyingMemoryProblemDataset, 'addition': AddingProblemDataset, 'pmnist': MnistProblemDataset,
                  'bmnist': BigMnistProblemDataset, 'rmnist': RandomMnistProblemDataset, 'timit': TIMIT}
 outputsize_dict = {'copy': 10, 'addition': 1, 'pmnist': 10, 'rmnist': 10, 'bmnist': 10, 'timit': 129}
@@ -49,11 +52,22 @@ inputsize_dict = {'copy': 10, 'addition': 2, 'pmnist': 1, 'rmnist': 1, 'bmnist':
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
+def copy_collate(data):
+    """
+       data: is a list of tuples with (example, label, length)
+             where 'example' is a tensor of arbitrary shape
+             and label/length are scalars
+    """
+    x,y = zip(*data)
+    padded_x = pad_sequence(x, batch_first=True, padding_value=0)
+    padded_y = pad_sequence(y, batch_first=True, padding_value=0)
+    return padded_x, padded_y
+
 
 @ex.config
 def cfg():
     sample_len = 100
-    epochs = 60
+    epochs = 1000
     lr = 1e-3  # rmsprop uses 1e-3, adam 1e-4
     seed = 1234
     hidden_size = 128
@@ -248,18 +262,58 @@ def eval_timit(epoch, model, dataset, optimizer):
 
     return total_loss / len(dataset)
 
+def test(model, dataset, sample_len=None):
+    total_loss = 0
+    total_accuracy = 0
+    model.eval()
+    with tqdm(total=len(dataset)) as pbar:
+        
+        for i, (x,y) in enumerate(dataset):
+           with torch.no_grad():
+            x = x.cuda()
+            y = y.cuda()
+            output = model(x)[0]
+            if model.single_output:
+                loss = F.mse_loss(output.squeeze(), y.squeeze())
+                total_loss += loss.item()
+                pbar.set_description('mse: {:.4f}'.format(total_loss / (i + 1)))
+            else:
 
-def train(epoch, model, dataset, optimizer):
+                loss = F.cross_entropy(output.transpose(2, 1), y.squeeze(-1))
+                total_loss += loss.item()
+                _, predictions = torch.max(output, 2)
+                accuracy = (predictions.squeeze() == y.squeeze()).float().mean().item()
+                total_accuracy += accuracy
+                pbar.set_description(
+                    'ce: {:.4f} accuracy: {:.4f}'.format(total_loss / (i + 1),
+                                                         total_accuracy / (i + 1)))
+            pbar.update()
+        if model.single_output:
+            pbar.set_description('test mse: {:.4f}'.format(total_loss / len(dataset)))
+        else:
+            pbar.set_description(
+                'test ce: {:.4f} test accuracy: {:.4f}'.format(total_loss / len(dataset),
+                                                     total_accuracy / len(dataset)))
+    model.train()
+    if model.single_output:
+        return total_loss / len(dataset)
+    else:
+        return total_loss / len(dataset), total_accuracy / len(dataset)
+        
+
+def train(epoch, model, dataset, optimizer, sample_len=None):
     model.train()
     total_loss = 0
     total_accuracy = 0
     with tqdm(total=len(dataset)) as pbar:
         for i, (x, y) in enumerate(dataset):
+            dataset.sample_len = random.randint(21, 202)
             model.zero_grad()
             if isinstance(optimizer, tuple):
                 optimizer[1].zero_grad()
             x = x.cuda()
             y = y.cuda()
+            print(x.shape)
             if isinstance(model, Online_SRNN_GLN):
                 output = model(x,y)[0]
             else:
@@ -269,7 +323,6 @@ def train(epoch, model, dataset, optimizer):
                 total_loss += loss.item()
                 pbar.set_description('mse: {:.4f}'.format(total_loss / (i + 1)))
             else:
-
                 loss = F.cross_entropy(output.transpose(2, 1), y.squeeze(-1))
                 total_loss += loss.item()
                 _, predictions = torch.max(output, 2)
@@ -367,7 +420,7 @@ def main(_run):
                                                                  (0.1307,), (0.3081,))
                                                          ]), perm=perm), batch_size=1, shuffle=False)
 
-        if _run.config['model'] == 'srnn' or _run.config['model'] == 'srnnfast':
+        if _run.config['model'] == 'srnn' or _run.config['model'] == 'srnnfast' or _run.config['model'] == 'srnngln' or 'srnn' in _run.config['model']:
             if problem == 'rmnist':
                 summary_path = os.path.join(storage_path, problem,
                                             _run.config['model'] + ('no_gate' if _run.config['no_gate'] else ''),
@@ -391,7 +444,11 @@ def main(_run):
     elif problem == 'copy':
         dataset = DataLoader(
             datasets_dict[problem](ds_size=1000, sample_len=_run.config['sample_len']),
-            batch_size=_run.config['batch_size'])
+            batch_size=_run.config['batch_size'], collate_fn=copy_collate)
+        test_dataset = DataLoader(
+             datasets_dict[problem](ds_size=200, sample_len=_run.config['sample_len']),
+            batch_size=_run.config['batch_size'], collate_fn=copy_collate
+        )
         summary_path = os.path.join(storage_path, problem, str(_run.config['sample_len']),
                                     _run.config['model'] + ('no_gate' if _run.config['no_gate'] else ''),
                                     str(_run.config['hidden_size']), str(_run.config['hyper_size']),
@@ -405,7 +462,7 @@ def main(_run):
         test_dataset = DataLoader(datasets_dict[problem]('data/TIMIT', mode='test'), batch_size=400,
                                   shuffle=True)
 
-        if _run.config['model'] == 'srnn' or _run.config['model'] == 'srnnfast':
+        if _run.config['model'] == 'srnn' or _run.config['model'] == 'srnnfast' or _run.config['model'] == 'srnngln' or 'srnn' in _run.config['model']:
             summary_path = os.path.join(storage_path, problem,
                                         _run.config['model'] + ('no_gate' if _run.config['no_gate'] else ''),
                                         _run.config['optimizer'],
@@ -419,12 +476,17 @@ def main(_run):
         dataset = DataLoader(
             datasets_dict[problem](ds_size=100 * _run.config['batch_size'], sample_len=_run.config['sample_len']),
             batch_size=_run.config['batch_size'])
+        test_dataset = DataLoader(datasets_dict[problem](ds_size=20* _run.config['batch_size'], sample_len=_run.config['sample_len']),
+            batch_size=_run.config['batch_size'])
         summary_path = os.path.join(storage_path, problem, str(_run.config['sample_len']),
                                     _run.config['model'] + ('no_gate' if _run.config['no_gate'] else ''))
 
     else:
         dataset = DataLoader(
             datasets_dict[problem](ds_size=1000 * _run.config['batch_size'], sample_len=_run.config['sample_len']),
+            batch_size=_run.config['batch_size'])
+        test_dataset =  DataLoader(
+            datasets_dict[problem](ds_size=200 * _run.config['batch_size'], sample_len=_run.config['sample_len']),
             batch_size=_run.config['batch_size'])
         summary_path = os.path.join(storage_path, problem, str(_run.config['sample_len']),
                                     _run.config['model'] + ('no_gate' if _run.config['no_gate'] else ''))
@@ -451,7 +513,7 @@ def main(_run):
         elif _run.config['optimizer'] == 'adam':
             optimizer = torch.optim.Adam(model.parameters(), lr=_run.config['lr'])
 
-    writer = SummaryWriter(log_dir=os.path.join(summary_path))
+    writer = SummaryWriter(log_dir=os.path.join(summary_path), flush_secs=1)
     print('Number of model parameters: {}'.format(count_parameters(model)))
     best_mse = np.inf
     best_acc = 0
@@ -531,14 +593,20 @@ def main(_run):
         MSEs = []
         CEs = []
         accs = []
+        MSEs_test = []
+        CEs_test = []
+        accs_test = []
+        print(f"MODEL:{model}")
         with tqdm(total=_run.config['epochs']) as pbar:
             for i in range(1, _run.config['epochs']+1):
 
-                res = train(i, model, dataset, optimizer)
+                res = train(i, model, dataset, optimizer, sample_len)
                 MSEs.append(res)
+                res_test = test(model, test_dataset, sample_len)
                 if problem == 'addition':
                     pbar.set_description('Addition Epoch: {:04d}; Sample Length: {:04d}'.format(i, sample_len))
                     writer.add_scalar('MSE/Train', res, i)
+                    writer.add_scalar('MSE/Test',res_test, i)
 
                     if res < best_mse:
                         best_mse = res
@@ -546,6 +614,7 @@ def main(_run):
                         writer.add_scalar('MSE/Best_MSE', res, i)
 
                     save_stat_file('MSE', MSEs, summary_path)
+                    save_stat_file('MSE_Test', MSEs_test, summary_path)
                 elif problem == 'copy' or problem == 'denoising' or problem == 'vcopy':
                     if problem == 'copy':
                         pbar.set_description('Memory Copy E: {:04d}; Time Gap: {:04d}'.format(i, sample_len))
@@ -556,8 +625,12 @@ def main(_run):
                         pbar.set_description('Denoising E: {:04d}; Time Gap: {:04d}'.format(i, sample_len))
                     writer.add_scalar('CE/Train', res[0], i)
                     writer.add_scalar('Accuracy/Train', res[1], i)
+                    writer.add_scalar('CE/Test', res_test[0], i)
+                    writer.add_scalar('Accuracy/Test', res_test[1], i)
                     CEs.append(res[0])
                     accs.append(res[1])
+                    CEs_test.append(res_test[0])
+                    accs_test.append(res_test[1])
                     if res[0] < best_ce:
                         best_ce = res[0]
                         save_model(model, _run.config, summary_path)
@@ -568,6 +641,8 @@ def main(_run):
                         writer.add_scalar('Accuracy/Best_Accuracy', res[1], i)
                     save_stat_file('CE', CEs, summary_path)
                     save_stat_file('Accuracy', accs, summary_path)
+                    save_stat_file('CE_Test', CEs_test, summary_path)
+                    save_stat_file('Accuracy_Test', accs_test, summary_path)
                 pbar.update()
 
     # writer.file_writer.add_summary(sei)

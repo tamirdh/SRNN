@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
-
+import random
 
 class CopyingMemoryProblemDataset(Dataset):
     def __init__(self, ds_size=1000, sample_len=50):
@@ -11,12 +11,13 @@ class CopyingMemoryProblemDataset(Dataset):
 
     def generate_sample(self, num_samples):
         assert (self.sample_len > 20)  # must be
-
-        X = np.zeros((self.sample_len, 1))
+        #vec_len = random.randint(21, self.sample_len)
+        vec_len = self.sample_len
+        X = np.zeros((vec_len, 1))
         data = np.random.randint(low=1, high=9, size=(10, 1))
         X[:10] = data
         X[-11] = 9
-        Y = np.zeros((self.sample_len, 1))
+        Y = np.zeros((vec_len, 1))
         Y[-10:] = X[:10]
         return X, Y
 
@@ -31,5 +32,5 @@ if __name__ == '__main__':
     s = CopyingMemoryProblemDataset(ds_size=1000, sample_len=21)
     d = DataLoader(s, batch_size=1)
     t = next(enumerate(d))[1]
-    print(t[0])
-    print(t[1])
+    print(t[0].shape)
+    print(t[1].shape)
