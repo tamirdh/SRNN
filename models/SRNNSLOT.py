@@ -128,11 +128,11 @@ class SRNNSLOT(jit.ScriptModule):
         self.single_output = kwargs['single_output']
         if kwargs['embedding']:
             self.embedding = nn.Embedding(input_size, kwargs['hyper_size'])
-            self.rnncell = SLOTCell(kwargs['hyper_size'], hidden_size, num_layers, **kwargs)
+            self.rnncell = SLOTCellV2(kwargs['hyper_size'], hidden_size, num_layers, **kwargs)
             self.do_embedding = True
         else:
             self.embedding = nn.Embedding(1, 1)
-            self.rnncell = SLOTCell(input_size, hidden_size, num_layers, **kwargs)
+            self.rnncell = SLOTCellV2(input_size, hidden_size, num_layers, **kwargs)
             self.do_embedding = False
 
         self.end_fc = nn.Linear(hidden_size, output_size)
@@ -152,3 +152,112 @@ class SRNNSLOT(jit.ScriptModule):
         #print(f"out shape: {outputs.shape}")
         #print(f"hidden shape: {hidden.shape}")
         return outputs, hidden
+
+
+class SLOTCellV2(jit.ScriptModule):
+    __constants__ = ['do_embedding', 'single_output', 'multihead']
+    def __init__(self, input_size, hidden_size, num_layers=1, hyper_size=64, **kwargs):
+        """
+        A single SRNN Slot attention cell. 
+        Accepts X of shape [B, L, I] as input
+        Uses hyper_size slots of size Dh
+        Args:
+            input_size ([type]): Xi size
+            hidden_size ([type]): Slot size
+            num_layers (int, optional): Number of SRNN layers. Defaults to 1.
+            hyper_size (int, optional): Number of slots. Defaults to 64.
+
+        """
+        super().__init__()
+        if 'multihead' not in kwargs:
+            self.multihead = True
+        else:
+            self.multihead = kwargs['multihead']
+        
+        # Slot attention related params
+        self.hidden_size = hidden_size
+        self.slot_n = hyper_size
+        self.k = nn.Linear(input_size, hidden_size)
+        self.q = nn.Linear(hidden_size, hidden_size)
+        self.v = nn.Linear(input_size, hidden_size)
+        self.slots_fc = nn.Linear(hidden_size, hidden_size)
+
+        # SRNN layer related params
+        l_list = [nn.Linear(hidden_size, hyper_size), nn.ReLU()]
+        for _ in range(1, num_layers):
+            l_list.extend([nn.Linear(hyper_size, hyper_size), nn.ReLU()])
+        l_list.append(nn.Linear(hyper_size, hidden_size))
+        self.fc = nn.Sequential(*l_list)
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.decoder = nn.Linear(hidden_size*hyper_size, hidden_size)
+        self.slot_choice = nn.Linear(hidden_size*hyper_size, hidden_size)
+
+        
+    @jit.script_method
+    def init_slots(self, batch_size:int):
+        return torch.randn((batch_size, self.slot_n, self.hidden_size))
+
+    @jit.script_method
+    def forward(self, x, hidden:Optional[torch.Tensor]=None):
+        """
+        return outputs, slots
+        """
+        if len(x.shape) == 2:
+            batch_size, seq_len = x.shape
+        else:
+            batch_size, seq_len, inp_size = x.shape
+        #print(f"\nX: {x.shape}")
+        
+        # Normalize inputs
+        with torch.no_grad():
+            x_norm = layer_norm(x, x.shape)
+        #print(f"X norm: {x_norm.shape}")
+
+        # Check if slots were inititalized
+        if hidden is None:
+            hidden = self.init_slots(batch_size).to(x.device)
+        # slot operation
+        slots = hidden # (B, K, Dh)
+        updates:torch.Tensor = torch.empty((1))
+        k_res:torch.Tensor = torch.empty((1))
+        q_res:torch.Tensor = torch.empty((1))
+        attn:torch.Tensor = torch.empty((1))
+        input_proj:torch.Tensor = torch.empty((1))
+        prev_slots:torch.Tensor = torch.empty((1))
+        outputs = list()
+        for _ in range(5):
+            # Used later in SRNN
+            prev_slots = slots.detach()
+            # LayerNorm(slots)
+            with torch.no_grad():
+                slots = layer_norm(slots, slots.shape)
+            # Attention
+            k_res = self.k(x_norm) # (B,L,D_h)
+            q_res = torch.transpose(self.q(slots), -2, -1) # (B, D_h, K)
+            with torch.no_grad():
+                attn = softmax((1/sqrt(self.hidden_size))*torch.matmul(k_res, q_res), dim=-2) # (B, K, Dh)
+            # Updates
+            input_proj = self.v(x_norm) # (B, L, D_h)
+            with torch.no_grad():
+                attn += 1e-4
+                attn = torch.transpose(attn, -2, -1)
+                updates = torch.matmul(attn, input_proj) # (B, L, K, Dh)
+            slots = self.slots_fc(slots)
+            # SRNN stage
+        b = self.fc(updates)
+        if self.multihead:
+            sig_alphas = torch.sigmoid(self.fc2(updates))
+            b = b * sig_alphas
+        #b = self.decoder(b.view(batch_size,-1))
+        b = torch.amax(b, dim=-2)
+        prev_slots = self.slot_choice(prev_slots.view(batch_size, -1))
+        outputs.append(torch.relu(b + torch.roll(prev_slots, 1, -1)))
+        for _ in range(1, seq_len):
+            outputs.append(torch.relu(b + torch.roll(outputs[-1], 1, -1)))            
+        
+        outputs = torch.stack(outputs, 1)
+        outputs = outputs.squeeze(2)
+        return outputs, prev_slots
+
+
+    
