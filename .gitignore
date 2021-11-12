@@ -105,3 +105,11 @@ venv.bak/
 
 # storage
 storage/*
+*.png
+*.csv
+*.json
+*.txt
+data/*
+storage_time/*
+*.err
+*.out
